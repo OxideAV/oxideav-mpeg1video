@@ -1,4 +1,4 @@
-//! Pure-Rust MPEG-1 video (ISO/IEC 11172-2) decoder + I-frame encoder.
+//! Pure-Rust MPEG-1 video (ISO/IEC 11172-2) decoder and encoder.
 //!
 //! Current status:
 //! * Milestone 1 — sequence / GOP / picture header parsing: done.
@@ -54,7 +54,8 @@ pub fn register(reg: &mut CodecRegistry) {
         .with_max_size(4096, 4096);
     let id = CodecId::new(CODEC_ID_STR);
     reg.register_decoder_impl(id.clone(), caps.clone(), decoder::make_decoder);
-    // Encoder produces I + P pictures (no B in v1).
+    // Encoder produces I + P pictures by default; B-frames are available via
+    // `encoder::make_encoder_with_gop`.
     let enc_caps = caps.with_intra_only(false);
     reg.register_encoder_impl(id, enc_caps, encoder::make_encoder);
 }

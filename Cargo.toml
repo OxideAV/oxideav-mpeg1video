@@ -6,7 +6,7 @@ rust-version = "1.80"
 license = "MIT"
 repository = "https://github.com/OxideAV/oxideav-mpeg1video"
 authors = ["Mark Karpeles"]
-description = "Pure-Rust MPEG-1 Video (ISO/IEC 11172-2) decoder for oxideav"
+description = "Pure-Rust MPEG-1 Video (ISO/IEC 11172-2) decoder and encoder for oxideav"
 
 readme = "README.md"
 homepage = "https://github.com/OxideAV/oxideav-mpeg1video"
