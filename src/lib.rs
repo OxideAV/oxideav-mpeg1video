@@ -13,10 +13,15 @@
 //!   forward DCT, intra quantisation, DC differential + AC run/level VLC,
 //!   one-slice-per-row output.
 //! * Milestone 6 — P-frame encoder: forward block-matching motion estimation
-//!   (integer-pel ±7), MV differential coding via Table B-10, MB types
-//!   (skip / forward / forward+coded / intra fallback), inter quant + Table
-//!   B-14 first-coeff VLC, and CBP encoding via Table B-9. B-frames remain
-//!   out of scope.
+//!   (integer-pel ±8 + half-pel refinement), MV differential coding via Table
+//!   B-10, MB types (skip / forward / forward+coded / intra fallback), inter
+//!   quant + Table B-14 first-coeff VLC, and CBP encoding via Table B-9.
+//! * Milestone 7 — B-frame encoder: display-order reorder buffer emits
+//!   anchors (I/P) before their trailing B-pictures, per-MB decision
+//!   between forward / backward / interpolated (fwd+bwd averaged) MC and
+//!   intra fallback. Bitstream carries picture_coding_type=3 for B-frames
+//!   with forward_f_code and backward_f_code = 1. GOP layout is configurable
+//!   via [`encoder::make_encoder_with_gop`] (default: IPP, no B-frames).
 //!
 //! This crate intentionally has no runtime dependencies beyond `oxideav-core`
 //! and `oxideav-codec`.

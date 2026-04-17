@@ -1,33 +1,36 @@
-//! MPEG-1 video encoder (ISO/IEC 11172-2) — I + P pictures.
+//! MPEG-1 video encoder (ISO/IEC 11172-2) — I + P + B pictures.
 //!
 //! Scope:
 //! * Sequence header (resolution, frame rate, aspect ratio, bit rate, VBV).
-//! * GOP header (closed GOP, time-code 0). One GOP per `gop_size` input
-//!   frames: `I P P P ... P`. No B-frames in v1.
-//! * Per-picture coding type 1 (I) or 2 (P).
+//! * GOP header (closed GOP, time-code 0).
+//! * Per-picture coding type 1 (I), 2 (P) or 3 (B).
 //! * One slice per macroblock row.
-//! * Intra macroblocks only for I-pictures: forward DCT → intra
-//!   quantisation → DC differential + AC run/level VLC coding via Tables
-//!   B-12..B-15.
+//! * Intra macroblocks only for I-pictures.
 //! * For P-pictures, four MB types:
 //!     * Skipped (MBA increment, MV=(0,0), no residual).
 //!     * `MB_INTRA` (fall-back to intra coding).
 //!     * `MB_FORWARD` (forward MC, no coded residual; CBP=0, MB type "001").
 //!     * `MB_FORWARD + PATTERN` (forward MC + coded residual).
-//! * Block-matching motion estimation: simple full search at integer-pel
-//!   precision in [-7, +7] integer pels around the collocated position. We
-//!   restrict the search to ±7 so the resulting motion-vector differential
-//!   always fits the 17-entry Table B-10 (|motion_code| ≤ 16 with f_code=1).
-//! * MV differential encoding via Table B-10 + sign bit (no complement_r
-//!   bits because forward_f_code = 1).
+//! * For B-pictures, bidirectional motion-compensated prediction per MB:
+//!     * Forward (fwd-only), Backward (bwd-only), Interpolated (average of
+//!       fwd + bwd) and INTRA fallback. Each of the inter options may carry
+//!       a coded residual (CBP via Table B-9, non-intra quant + Table B-14
+//!       VLC).
+//! * GOP reorder buffer: the encoder accepts frames in display order and
+//!   emits them in bitstream order (anchor first, then its preceding Bs).
+//! * Block-matching motion estimation at integer-pel ±8 with half-pel
+//!   refinement. With f_code=1 the motion-vector code range is ±16 half-pel.
+//! * MV differential encoding via Table B-10 + sign bit (forward_f_code =
+//!   backward_f_code = 1 → no complement_r bits).
 //! * Inter-block residual: forward DCT of (sample - prediction), then
 //!   non-intra quantisation, then run/level VLC via Table B-14 with the
 //!   "first coefficient" interpretation (1s = ±1 instead of EOB).
 //! * 4:2:0 chroma subsampling.
 //!
-//! The encoder maintains a *reconstructed* reference picture so that the
-//! prediction it builds is bit-exact w.r.t. what the decoder will see — this
-//! is essential for drift-free P-frame round-trips.
+//! The encoder maintains *reconstructed* reference pictures (forward and
+//! backward slots for B-frame encoding) so that the prediction it builds is
+//! bit-exact w.r.t. what the decoder will see — this is essential for
+//! drift-free round-trips.
 
 use std::collections::VecDeque;
 
@@ -55,11 +58,19 @@ use crate::vlc::VlcEntry;
 pub const DEFAULT_QUANT_SCALE: u8 = 3;
 
 /// Default GOP size (number of pictures per GOP). The first picture of each
-/// GOP is an I-frame; the remainder are P-frames.
+/// GOP is an I-frame; the remainder are P/B frames laid out per the
+/// [`DEFAULT_NUM_B_FRAMES`] pattern.
+///
 /// The default is intentionally short to keep cumulative drift in the f32
 /// IDCT chain bounded. Production users should set a larger GOP via
-/// CodecParameters::extra_data once the encoder exposes that knob.
+/// [`make_encoder_with_gop`].
 pub const DEFAULT_GOP_SIZE: u32 = 3;
+
+/// Default number of B-frames between two consecutive anchor (I/P) frames.
+/// `0` gives the classic `IPPP...` GOP layout (no B-frames). To enable a
+/// B-frame GOP (e.g. `IBBP` with `num_b_frames = 2`) use
+/// [`make_encoder_with_gop`].
+pub const DEFAULT_NUM_B_FRAMES: u32 = 0;
 
 /// Maximum |motion_code| after differential — Table B-10 has entries
 /// 0..=16, so 16 is the spec limit for f_code=1.
@@ -67,6 +78,19 @@ const MAX_MOTION_CODE: i32 = 16;
 
 /// Encoder factory used by `register()`.
 pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
+    make_encoder_with_gop(params, DEFAULT_GOP_SIZE, DEFAULT_NUM_B_FRAMES)
+}
+
+/// Encoder factory allowing callers to override the GOP size and B-frame
+/// spacing. `num_b_frames` is the number of B-frames between two
+/// consecutive anchor (I/P) frames: `IBBP` corresponds to `num_b_frames = 2`.
+///
+/// `num_b_frames = 0` disables B-frames entirely (classic `IPPP` GOP).
+pub fn make_encoder_with_gop(
+    params: &CodecParameters,
+    gop_size: u32,
+    num_b_frames: u32,
+) -> Result<Box<dyn Encoder>> {
     let width = params
         .width
         .ok_or_else(|| Error::invalid("MPEG-1 encoder: missing width"))?;
@@ -78,6 +102,9 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
     }
     if width > 4095 || height > 4095 {
         return Err(Error::invalid("MPEG-1 encoder: dimensions exceed 12-bit"));
+    }
+    if gop_size == 0 {
+        return Err(Error::invalid("MPEG-1 encoder: gop_size must be ≥ 1"));
     }
     let pix = params.pixel_format.unwrap_or(PixelFormat::Yuv420P);
     if pix != PixelFormat::Yuv420P {
@@ -109,7 +136,8 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
         frame_rate_code,
         bit_rate,
         quant_scale: DEFAULT_QUANT_SCALE,
-        gop_size: DEFAULT_GOP_SIZE,
+        gop_size,
+        num_b_frames,
         time_base,
         pending: VecDeque::new(),
         gop_pos: 0,
@@ -119,6 +147,13 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
         ref_y_stride: 0,
         ref_c_stride: 0,
         ref_valid: false,
+        prev_ref_y: Vec::new(),
+        prev_ref_cb: Vec::new(),
+        prev_ref_cr: Vec::new(),
+        prev_ref_y_stride: 0,
+        prev_ref_c_stride: 0,
+        prev_ref_valid: false,
+        b_queue: VecDeque::new(),
         eof: false,
         finalised: false,
     }))
@@ -145,6 +180,13 @@ fn frame_rate_code_for(r: Rational) -> Option<u8> {
     None
 }
 
+/// A buffered input frame with its intended display-order temporal reference.
+struct QueuedFrame {
+    frame: VideoFrame,
+    /// `temporal_reference` = display-order position within the current GOP.
+    temporal_reference: u16,
+}
+
 struct Mpeg1VideoEncoder {
     output_params: CodecParameters,
     width: u32,
@@ -152,22 +194,38 @@ struct Mpeg1VideoEncoder {
     frame_rate_code: u8,
     bit_rate: u64,
     quant_scale: u8,
-    /// Pictures per GOP (I + (gop_size - 1) × P). Must be ≥ 1.
+    /// Pictures per GOP in display order. Must be ≥ 1.
     gop_size: u32,
+    /// Number of B-frames between two consecutive anchor (I/P) frames.
+    /// Anchor distance `m = num_b_frames + 1`.
+    num_b_frames: u32,
     time_base: TimeBase,
     pending: VecDeque<Packet>,
-    /// Position within the current GOP. Picture 0 is I, picture > 0 is P.
+    /// Position within the current GOP in *display* order. Picture 0 is I.
     gop_pos: u32,
-    /// Reconstructed reference picture (most recent I or P, after our own
-    /// decode of the bitstream we just emitted). Plane sizes are macroblock-
-    /// aligned to (mb_w*16) × (mb_h*16) for luma and half that for chroma.
+    /// Reconstructed "backward" reference picture = most recently encoded
+    /// anchor (I or P). Used as the forward reference for the *next* P
+    /// frame, and as the backward reference for any buffered B frames.
+    /// Plane sizes are macroblock-aligned.
     ref_y: Vec<u8>,
     ref_cb: Vec<u8>,
     ref_cr: Vec<u8>,
     ref_y_stride: usize,
     ref_c_stride: usize,
-    /// True once we have at least one I-picture in the reference slot.
+    /// True once we have at least one I-picture in the `ref_*` slot.
     ref_valid: bool,
+    /// Reconstructed "forward" reference picture = penultimate anchor. Used
+    /// as the forward reference for any buffered B frames.
+    prev_ref_y: Vec<u8>,
+    prev_ref_cb: Vec<u8>,
+    prev_ref_cr: Vec<u8>,
+    prev_ref_y_stride: usize,
+    prev_ref_c_stride: usize,
+    prev_ref_valid: bool,
+    /// Display-order B-frame reorder buffer. B-frames arrive from the
+    /// caller before their backward reference exists; we hold them here
+    /// until the next anchor has been encoded, then flush them.
+    b_queue: VecDeque<QueuedFrame>,
     eof: bool,
     finalised: bool,
 }
@@ -199,16 +257,45 @@ impl Encoder for Mpeg1VideoEncoder {
         if v.planes.len() != 3 {
             return Err(Error::invalid("MPEG-1 encoder: expected 3 planes"));
         }
-        // Pick picture coding type for this frame: I at GOP boundaries,
-        // P otherwise.
-        let is_intra = self.gop_pos == 0 || !self.ref_valid;
-        let temporal_reference = self.gop_pos as u16;
-        let data = encode_picture(self, v, is_intra, temporal_reference)?;
-        let mut pkt = Packet::new(0, self.time_base, data);
-        pkt.pts = v.pts;
-        pkt.dts = v.pts;
-        pkt.flags.keyframe = is_intra;
-        self.pending.push_back(pkt);
+
+        let pos = self.gop_pos;
+        let tr = pos as u16;
+        let kind = picture_kind_for_position(pos, self.num_b_frames, self.ref_valid);
+
+        match kind {
+            PictureKind::I | PictureKind::P => {
+                let is_intra = matches!(kind, PictureKind::I);
+                // If this is the start of a new GOP (I-frame at pos 0) and
+                // there are pending B-frames from the previous GOP, promote
+                // them to P-frames before emitting the new I. Rationale:
+                // B-frames that straddle GOP boundaries would need the new I
+                // as their backward reference, but their temporal_reference
+                // belongs to the previous GOP. Promoting them to P keeps the
+                // GOP structure "closed" and avoids PTS-reconstruction
+                // ambiguity on the decoder side.
+                if is_intra && pos == 0 && !self.b_queue.is_empty() {
+                    self.finalise_trailing_b_as_p()?;
+                }
+                let data = encode_anchor_picture(self, v, is_intra, tr)?;
+                let mut pkt = Packet::new(0, self.time_base, data);
+                pkt.pts = v.pts;
+                pkt.dts = v.pts;
+                pkt.flags.keyframe = is_intra;
+                self.pending.push_back(pkt);
+                // Flush any buffered B-frames that are display-ordered BEFORE
+                // this anchor. They use prev_ref as fwd and the freshly-rolled
+                // ref as bwd.
+                self.flush_buffered_b_frames()?;
+            }
+            PictureKind::B => {
+                // Buffer until the next anchor has been emitted.
+                self.b_queue.push_back(QueuedFrame {
+                    frame: v.clone(),
+                    temporal_reference: tr,
+                });
+            }
+        }
+
         self.gop_pos += 1;
         if self.gop_pos >= self.gop_size {
             self.gop_pos = 0;
@@ -221,6 +308,13 @@ impl Encoder for Mpeg1VideoEncoder {
             return Ok(p);
         }
         if self.eof && !self.finalised {
+            // On flush, if we have leftover B-frames in the reorder buffer
+            // (trailing Bs of the final GOP with no next anchor yet), promote
+            // them to P-frames. They just use the current ref as forward.
+            self.finalise_trailing_b_as_p()?;
+            if let Some(p) = self.pending.pop_front() {
+                return Ok(p);
+            }
             self.finalised = true;
             let mut bw = BitWriter::new();
             write_start_code(&mut bw, SEQUENCE_END_CODE);
@@ -241,11 +335,79 @@ impl Encoder for Mpeg1VideoEncoder {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PictureKind {
+    I,
+    P,
+    B,
+}
+
+/// Classify a display-order GOP position as I/P/B.
+///
+/// Position 0 is the I-frame. Positions at multiples of `m = num_b_frames+1`
+/// (other than 0) are P-frames. Every other position is a B-frame.
+///
+/// If there is no valid forward reference yet (`ref_valid == false`),
+/// the frame falls back to I (bootstrap).
+fn picture_kind_for_position(pos: u32, num_b_frames: u32, ref_valid: bool) -> PictureKind {
+    if pos == 0 || !ref_valid {
+        return PictureKind::I;
+    }
+    let m = num_b_frames + 1;
+    if pos % m == 0 {
+        PictureKind::P
+    } else {
+        PictureKind::B
+    }
+}
+
+impl Mpeg1VideoEncoder {
+    /// Emit any buffered B-frames, one packet each, using prev_ref as forward
+    /// and ref as backward reference. References are assumed up to date for
+    /// the B-frames we are about to encode (called right after an anchor is
+    /// emitted).
+    fn flush_buffered_b_frames(&mut self) -> Result<()> {
+        if self.b_queue.is_empty() {
+            return Ok(());
+        }
+        if !self.prev_ref_valid || !self.ref_valid {
+            return Err(Error::invalid(
+                "B-frame flush: missing forward or backward reference",
+            ));
+        }
+        // Drain in display order (same as insertion order).
+        while let Some(qf) = self.b_queue.pop_front() {
+            let data = encode_b_picture(self, &qf.frame, qf.temporal_reference)?;
+            let mut pkt = Packet::new(0, self.time_base, data);
+            pkt.pts = qf.frame.pts;
+            pkt.dts = qf.frame.pts;
+            pkt.flags.keyframe = false;
+            self.pending.push_back(pkt);
+        }
+        Ok(())
+    }
+
+    /// Called on flush() to handle any trailing B-frames that never got a
+    /// following anchor. They are re-encoded as P-frames against the current
+    /// backward reference.
+    fn finalise_trailing_b_as_p(&mut self) -> Result<()> {
+        while let Some(qf) = self.b_queue.pop_front() {
+            let data = encode_anchor_picture(self, &qf.frame, false, qf.temporal_reference)?;
+            let mut pkt = Packet::new(0, self.time_base, data);
+            pkt.pts = qf.frame.pts;
+            pkt.dts = qf.frame.pts;
+            pkt.flags.keyframe = false;
+            self.pending.push_back(pkt);
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Picture encode
 // ---------------------------------------------------------------------------
 
-fn encode_picture(
+fn encode_anchor_picture(
     enc: &mut Mpeg1VideoEncoder,
     v: &VideoFrame,
     is_intra: bool,
@@ -320,7 +482,18 @@ fn encode_picture(
         }
     }
 
-    // Update encoder reference state with the freshly reconstructed picture.
+    // Roll reference pictures: old backward ref → forward ref, newly
+    // reconstructed → backward ref. The forward ref is needed for encoding
+    // any buffered B-frames that are display-ordered between the previous
+    // anchor and this one.
+    if enc.ref_valid {
+        enc.prev_ref_y = std::mem::take(&mut enc.ref_y);
+        enc.prev_ref_cb = std::mem::take(&mut enc.ref_cb);
+        enc.prev_ref_cr = std::mem::take(&mut enc.ref_cr);
+        enc.prev_ref_y_stride = enc.ref_y_stride;
+        enc.prev_ref_c_stride = enc.ref_c_stride;
+        enc.prev_ref_valid = true;
+    }
     enc.ref_y = recon_y;
     enc.ref_cb = recon_cb;
     enc.ref_cr = recon_cr;
@@ -329,6 +502,30 @@ fn encode_picture(
     enc.ref_valid = true;
 
     let _ = temporal_reference;
+    Ok(bw.finish())
+}
+
+/// Encode one B-frame. Does NOT roll reference pictures — B-frames are
+/// never used as anchors.
+fn encode_b_picture(
+    enc: &Mpeg1VideoEncoder,
+    v: &VideoFrame,
+    temporal_reference: u16,
+) -> Result<Vec<u8>> {
+    let mut bw = BitWriter::with_capacity(8192);
+
+    let mb_w = (enc.width as usize).div_ceil(16);
+    let mb_h = (enc.height as usize).div_ceil(16);
+
+    // Picture header.
+    write_start_code(&mut bw, PICTURE_START_CODE);
+    write_picture_header_b(&mut bw, temporal_reference);
+
+    for row in 0..mb_h {
+        write_start_code(&mut bw, (row + 1) as u8);
+        encode_slice_b(&mut bw, enc, v, row, mb_w)?;
+    }
+
     Ok(bw.finish())
 }
 
@@ -384,6 +581,18 @@ fn write_picture_header_p(bw: &mut BitWriter, temporal_reference: u16) {
     bw.write_bits(0xFFFF, 16); // vbv_delay
     bw.write_bits(0, 1); // full_pel_forward_vector = 0
     bw.write_bits(1, 3); // forward_f_code = 1 → ±16 half-pel
+    bw.write_bits(0, 1); // extra_bit_picture
+    bw.align_to_byte();
+}
+
+fn write_picture_header_b(bw: &mut BitWriter, temporal_reference: u16) {
+    bw.write_bits(temporal_reference as u32 & 0x3FF, 10);
+    bw.write_bits(3, 3); // picture_coding_type = 3 (B)
+    bw.write_bits(0xFFFF, 16); // vbv_delay
+    bw.write_bits(0, 1); // full_pel_forward_vector = 0
+    bw.write_bits(1, 3); // forward_f_code = 1 → ±16 half-pel
+    bw.write_bits(0, 1); // full_pel_backward_vector = 0
+    bw.write_bits(1, 3); // backward_f_code = 1 → ±16 half-pel
     bw.write_bits(0, 1); // extra_bit_picture
     bw.align_to_byte();
 }
@@ -1753,6 +1962,387 @@ fn find_eob_entry() -> VlcEntry<DctSym> {
         .iter()
         .find(|e| matches!(e.value, DctSym::Eob))
         .expect("EOB entry must exist")
+}
+
+// ---------------------------------------------------------------------------
+// B-picture slice / MB encode
+// ---------------------------------------------------------------------------
+
+/// B-frame per-MB coding decision. Every variant carries "no coded residual"
+/// (no pattern) — this is a conscious simplification: with two-sided
+/// prediction available, the residual is typically small and the B-frame
+/// bit budget savings come primarily from the better prediction itself
+/// rather than from residual corrections.
+#[derive(Clone, Copy, Debug)]
+enum BMbMode {
+    /// Forward motion only.
+    Forward { mv_x: i32, mv_y: i32 },
+    /// Backward motion only.
+    Backward { mv_x: i32, mv_y: i32 },
+    /// Bidirectional: average of forward and backward predictions.
+    Interpolated {
+        fwd_x: i32,
+        fwd_y: i32,
+        bwd_x: i32,
+        bwd_y: i32,
+    },
+    /// Intra fallback.
+    Intra,
+}
+
+/// MB-type VLC codes for B-pictures (Table B-4). These are the "not coded"
+/// (no pattern) variants. See `tables::mb_type::B_TABLE`.
+#[derive(Clone, Copy)]
+enum BMbTypeCode {
+    /// `10` — Interpolated, Not Coded (fwd + bwd).
+    InterpolatedNotCoded,
+    /// `010` — Backward, Not Coded.
+    BackwardNotCoded,
+    /// `0010` — Forward, Not Coded.
+    ForwardNotCoded,
+    /// `00011` — Intra.
+    Intra,
+}
+
+fn write_b_mb_type(bw: &mut BitWriter, kind: BMbTypeCode) {
+    let (bits, code) = match kind {
+        BMbTypeCode::InterpolatedNotCoded => (2u32, 0b10u32),
+        BMbTypeCode::BackwardNotCoded => (3, 0b010),
+        BMbTypeCode::ForwardNotCoded => (4, 0b0010),
+        BMbTypeCode::Intra => (5, 0b00011),
+    };
+    bw.write_bits(code, bits);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_slice_b(
+    bw: &mut BitWriter,
+    enc: &Mpeg1VideoEncoder,
+    v: &VideoFrame,
+    mb_row: usize,
+    mb_w: usize,
+) -> Result<()> {
+    if !enc.prev_ref_valid || !enc.ref_valid {
+        return Err(Error::invalid(
+            "encode_slice_b: missing forward or backward reference",
+        ));
+    }
+
+    bw.write_bits(enc.quant_scale as u32, 5);
+    bw.write_bits(0, 1); // extra_bit_slice
+
+    // Per-MB DC predictor (for intra-fallback blocks) + running MV
+    // predictors (one per direction). Both are reset on slice entry,
+    // skip-runs, and on intra MBs.
+    let mut dc_pred_q: [i32; 3] = [128, 128, 128];
+    let mut fwd_pred = (0i32, 0i32);
+    let mut bwd_pred = (0i32, 0i32);
+
+    for mb_col in 0..mb_w {
+        // Motion search against each reference. The forward reference is
+        // `prev_ref_*`, the backward reference is `ref_*`.
+        let (fwd_best, fwd_sad, _, intra_dev) =
+            motion_search_against(v, mb_row, mb_col, &enc.prev_ref_y, enc.prev_ref_y_stride);
+        let (bwd_best, bwd_sad, _, _) =
+            motion_search_against(v, mb_row, mb_col, &enc.ref_y, enc.ref_y_stride);
+
+        // Bidirectional SAD: average of the two reference patches.
+        let bi_sad = bi_sad_for(
+            v,
+            mb_row,
+            mb_col,
+            &enc.prev_ref_y,
+            enc.prev_ref_y_stride,
+            fwd_best.0,
+            fwd_best.1,
+            &enc.ref_y,
+            enc.ref_y_stride,
+            bwd_best.0,
+            bwd_best.1,
+        );
+
+        // Pick min. Favor smaller-SAD modes; intra only if nothing else
+        // comes remotely close.
+        let best_inter_sad = fwd_sad.min(bwd_sad).min(bi_sad);
+        let mode = if best_inter_sad > intra_dev * 4 + 6000 {
+            BMbMode::Intra
+        } else if bi_sad <= fwd_sad && bi_sad <= bwd_sad {
+            BMbMode::Interpolated {
+                fwd_x: fwd_best.0,
+                fwd_y: fwd_best.1,
+                bwd_x: bwd_best.0,
+                bwd_y: bwd_best.1,
+            }
+        } else if fwd_sad <= bwd_sad {
+            BMbMode::Forward {
+                mv_x: fwd_best.0,
+                mv_y: fwd_best.1,
+            }
+        } else {
+            BMbMode::Backward {
+                mv_x: bwd_best.0,
+                mv_y: bwd_best.1,
+            }
+        };
+
+        // The first MB of a slice must be coded explicitly (MBA = 1 and
+        // cannot use skip). We emit every B-frame MB explicitly (no skip
+        // compression in this first version), so MBA = 1 always.
+        write_mba(bw, 1)?;
+
+        match mode {
+            BMbMode::Forward { mv_x, mv_y } => {
+                write_b_mb_type(bw, BMbTypeCode::ForwardNotCoded);
+                encode_mv_diff(bw, &mut fwd_pred, mv_x, mv_y)?;
+                // Backward predictor stays untouched (no bwd MV in this MB).
+                // DC reset (intra predictor only matters for intra MBs).
+                dc_pred_q = [128, 128, 128];
+            }
+            BMbMode::Backward { mv_x, mv_y } => {
+                write_b_mb_type(bw, BMbTypeCode::BackwardNotCoded);
+                encode_mv_diff(bw, &mut bwd_pred, mv_x, mv_y)?;
+                dc_pred_q = [128, 128, 128];
+            }
+            BMbMode::Interpolated {
+                fwd_x,
+                fwd_y,
+                bwd_x,
+                bwd_y,
+            } => {
+                write_b_mb_type(bw, BMbTypeCode::InterpolatedNotCoded);
+                encode_mv_diff(bw, &mut fwd_pred, fwd_x, fwd_y)?;
+                encode_mv_diff(bw, &mut bwd_pred, bwd_x, bwd_y)?;
+                dc_pred_q = [128, 128, 128];
+            }
+            BMbMode::Intra => {
+                write_b_mb_type(bw, BMbTypeCode::Intra);
+                // Spec: when an intra MB appears in a B-picture, the MV
+                // predictors are reset to 0.
+                fwd_pred = (0, 0);
+                bwd_pred = (0, 0);
+                // Encode intra residual. The reconstructed samples are
+                // written into a throwaway buffer — B-frames are never
+                // used as references so we don't need to keep the
+                // reconstruction around.
+                encode_mb_intra_throwaway(bw, enc, v, mb_row, mb_col, &mut dc_pred_q)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Run a full-search motion estimation against an arbitrary reference plane
+/// buffer. Same algorithm as `mb_motion_search` but parameterised on which
+/// reference we're comparing against.
+///
+/// Returns `(best_mv, sad_at_best, sad_at_zero, intra_dev)`.
+fn motion_search_against(
+    v: &VideoFrame,
+    mb_row: usize,
+    mb_col: usize,
+    ref_y: &[u8],
+    ref_y_stride: usize,
+) -> ((i32, i32), u32, u32, u32) {
+    if ref_y.is_empty() {
+        return ((0, 0), u32::MAX, u32::MAX, u32::MAX);
+    }
+    let y_plane = &v.planes[0];
+    let w = v.width as i32;
+    let h = v.height as i32;
+
+    let x0 = (mb_col * 16) as i32;
+    let y0 = (mb_row * 16) as i32;
+    let mut cur = [0i32; 16 * 16];
+    for j in 0..16 {
+        for i in 0..16 {
+            let xx = (x0 + i).clamp(0, w - 1);
+            let yy = (y0 + j).clamp(0, h - 1);
+            cur[(j as usize) * 16 + i as usize] =
+                y_plane.data[(yy as usize) * y_plane.stride + xx as usize] as i32;
+        }
+    }
+
+    let rs = ref_y_stride as i32;
+    let rh = (ref_y.len() / ref_y_stride) as i32;
+
+    let sad_int_at = |dx: i32, dy: i32| -> u32 {
+        let mut sum: u32 = 0;
+        for j in 0..16i32 {
+            for i in 0..16i32 {
+                let xx = (x0 + i + dx).clamp(0, rs - 1);
+                let yy = (y0 + j + dy).clamp(0, rh - 1);
+                let r = ref_y[(yy as usize) * (rs as usize) + xx as usize] as i32;
+                let c = cur[(j as usize) * 16 + i as usize];
+                sum += (c - r).unsigned_abs();
+            }
+        }
+        sum
+    };
+
+    let sad_half_at = |mv_x_half: i32, mv_y_half: i32| -> u32 {
+        let mut pred = [0u8; 16 * 16];
+        crate::motion::predict_block(
+            ref_y,
+            ref_y_stride,
+            rs,
+            rh,
+            x0,
+            y0,
+            mv_x_half,
+            mv_y_half,
+            16,
+            &mut pred,
+            16,
+        );
+        let mut sum: u32 = 0;
+        for j in 0..16 {
+            for i in 0..16 {
+                let c = cur[j * 16 + i];
+                let r = pred[j * 16 + i] as i32;
+                sum += (c - r).unsigned_abs();
+            }
+        }
+        sum
+    };
+
+    let mut best_int: ((i32, i32), u32) = ((0, 0), sad_int_at(0, 0));
+    let sad_zero = best_int.1;
+    let bias_per_pel: u32 = 16;
+    for dy in -ME_RANGE_PEL..=ME_RANGE_PEL {
+        for dx in -ME_RANGE_PEL..=ME_RANGE_PEL {
+            let s = sad_int_at(dx, dy);
+            let bias = (dx.unsigned_abs() + dy.unsigned_abs()) * bias_per_pel;
+            let best_bias =
+                (best_int.0 .0.unsigned_abs() + best_int.0 .1.unsigned_abs()) * bias_per_pel;
+            if s + bias < best_int.1 + best_bias {
+                best_int = ((dx, dy), s);
+            }
+        }
+    }
+    let mut best: ((i32, i32), u32) = ((best_int.0 .0 * 2, best_int.0 .1 * 2), best_int.1);
+
+    let bias_per_half: u32 = 8;
+    let half_pel_win: u32 = 32;
+    let (mut bx, mut by) = best.0;
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let mx = bx + dx;
+            let my = by + dy;
+            if mx.abs() > 15 || my.abs() > 15 {
+                continue;
+            }
+            let s = sad_half_at(mx, my);
+            let bias = (mx.unsigned_abs() + my.unsigned_abs()) * bias_per_half;
+            let best_bias = (bx.unsigned_abs() + by.unsigned_abs()) * bias_per_half;
+            if s + bias + half_pel_win < best.1 + best_bias {
+                best = ((mx, my), s);
+                bx = mx;
+                by = my;
+            }
+        }
+    }
+
+    let mut mean: i32 = 0;
+    for c in cur.iter() {
+        mean += c;
+    }
+    mean /= 256;
+    let mut intra_dev: u32 = 0;
+    for c in cur.iter() {
+        intra_dev += (*c - mean).unsigned_abs();
+    }
+
+    (best.0, best.1, sad_zero, intra_dev)
+}
+
+/// Compute the luma SAD of an "interpolated" (bidirectional-averaged) MB
+/// prediction against the current picture's MB at (mb_col, mb_row). Mirrors
+/// the decoder's reconstruction: take fwd MC patch, take bwd MC patch,
+/// average with rounding, compare to the current samples.
+#[allow(clippy::too_many_arguments)]
+fn bi_sad_for(
+    v: &VideoFrame,
+    mb_row: usize,
+    mb_col: usize,
+    fwd_ref: &[u8],
+    fwd_stride: usize,
+    fwd_mv_x: i32,
+    fwd_mv_y: i32,
+    bwd_ref: &[u8],
+    bwd_stride: usize,
+    bwd_mv_x: i32,
+    bwd_mv_y: i32,
+) -> u32 {
+    let y_plane = &v.planes[0];
+    let w = v.width as i32;
+    let h = v.height as i32;
+    let x0 = (mb_col * 16) as i32;
+    let y0 = (mb_row * 16) as i32;
+
+    let mut fwd = [0u8; 16 * 16];
+    let mut bwd = [0u8; 16 * 16];
+    let frs = fwd_stride as i32;
+    let frh = (fwd_ref.len() / fwd_stride) as i32;
+    let brs = bwd_stride as i32;
+    let brh = (bwd_ref.len() / bwd_stride) as i32;
+    crate::motion::predict_block(
+        fwd_ref, fwd_stride, frs, frh, x0, y0, fwd_mv_x, fwd_mv_y, 16, &mut fwd, 16,
+    );
+    crate::motion::predict_block(
+        bwd_ref, bwd_stride, brs, brh, x0, y0, bwd_mv_x, bwd_mv_y, 16, &mut bwd, 16,
+    );
+
+    let mut sum: u32 = 0;
+    for j in 0..16i32 {
+        for i in 0..16i32 {
+            let xx = (x0 + i).clamp(0, w - 1);
+            let yy = (y0 + j).clamp(0, h - 1);
+            let c = y_plane.data[(yy as usize) * y_plane.stride + xx as usize] as i32;
+            let f = fwd[(j as usize) * 16 + i as usize] as u32;
+            let b = bwd[(j as usize) * 16 + i as usize] as u32;
+            let pred = ((f + b + 1) >> 1) as i32;
+            sum += (c - pred).unsigned_abs();
+        }
+    }
+    sum
+}
+
+/// Encode an intra MB into the bitstream, discarding the reconstruction.
+/// Used for intra-fallback MBs in B-pictures (since B-frames are never
+/// reference pictures, we don't need to keep the reconstruction).
+fn encode_mb_intra_throwaway(
+    bw: &mut BitWriter,
+    enc: &Mpeg1VideoEncoder,
+    v: &VideoFrame,
+    mb_row: usize,
+    mb_col: usize,
+    dc_pred_q: &mut [i32; 3],
+) -> Result<()> {
+    let mb_w = (enc.width as usize).div_ceil(16);
+    let mb_h = (enc.height as usize).div_ceil(16);
+    let y_stride = mb_w * 16;
+    let c_stride = mb_w * 8;
+    let mut recon_y = vec![0u8; y_stride * mb_h * 16];
+    let mut recon_cb = vec![0u8; c_stride * mb_h * 8];
+    let mut recon_cr = vec![0u8; c_stride * mb_h * 8];
+    encode_mb_intra(
+        bw,
+        enc,
+        v,
+        mb_row,
+        mb_col,
+        dc_pred_q,
+        &mut recon_y,
+        &mut recon_cb,
+        &mut recon_cr,
+        y_stride,
+        c_stride,
+    )?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
