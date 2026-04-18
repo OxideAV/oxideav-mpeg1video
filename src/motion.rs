@@ -130,7 +130,21 @@ fn mc_block(
     dst: &mut [u8],
     dst_stride: usize,
 ) {
-    // Clamp helper.
+    // Fast path: the full source window (including the half-pel partner
+    // when hx/hy is set) is inside the reference plane → no clamping
+    // needed. This covers the vast majority of macroblocks in typical
+    // content; only MBs on the image border take the clipped path.
+    let dx_extra = hx as i32;
+    let dy_extra = hy as i32;
+    if src_x >= 0 && src_y >= 0 && src_x + w + dx_extra <= ref_w && src_y + h + dy_extra <= ref_h {
+        mc_block_unclipped(
+            ref_plane, ref_stride, src_x, src_y, hx, hy, w, h, dst, dst_stride,
+        );
+        return;
+    }
+
+    // Slow path: at least one of the four sample fetches can land outside
+    // the reference frame → clamp every coordinate to the valid range.
     let clamp_x = |x: i32| x.clamp(0, ref_w - 1);
     let clamp_y = |y: i32| y.clamp(0, ref_h - 1);
 
@@ -163,6 +177,76 @@ fn mc_block(
                 }
             };
             dst[(j as usize) * dst_stride + (i as usize)] = v as u8;
+        }
+    }
+}
+
+/// In-bounds fast path for [`mc_block`]. Caller guarantees every referenced
+/// coordinate `(src_x..src_x+w+hx, src_y..src_y+h+hy)` lies within the
+/// reference plane, so no clamping is needed.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn mc_block_unclipped(
+    ref_plane: &[u8],
+    ref_stride: usize,
+    src_x: i32,
+    src_y: i32,
+    hx: bool,
+    hy: bool,
+    w: i32,
+    h: i32,
+    dst: &mut [u8],
+    dst_stride: usize,
+) {
+    let sx = src_x as usize;
+    let sy = src_y as usize;
+    let w = w as usize;
+    let h = h as usize;
+    match (hx, hy) {
+        (false, false) => {
+            for j in 0..h {
+                let src_off = (sy + j) * ref_stride + sx;
+                let dst_off = j * dst_stride;
+                dst[dst_off..dst_off + w].copy_from_slice(&ref_plane[src_off..src_off + w]);
+            }
+        }
+        (true, false) => {
+            for j in 0..h {
+                let row =
+                    &ref_plane[(sy + j) * ref_stride + sx..(sy + j) * ref_stride + sx + w + 1];
+                let out = &mut dst[j * dst_stride..j * dst_stride + w];
+                for i in 0..w {
+                    out[i] = ((row[i] as u32 + row[i + 1] as u32 + 1) >> 1) as u8;
+                }
+            }
+        }
+        (false, true) => {
+            for j in 0..h {
+                let row_a = &ref_plane[(sy + j) * ref_stride + sx..(sy + j) * ref_stride + sx + w];
+                let row_b =
+                    &ref_plane[(sy + j + 1) * ref_stride + sx..(sy + j + 1) * ref_stride + sx + w];
+                let out = &mut dst[j * dst_stride..j * dst_stride + w];
+                for i in 0..w {
+                    out[i] = ((row_a[i] as u32 + row_b[i] as u32 + 1) >> 1) as u8;
+                }
+            }
+        }
+        (true, true) => {
+            for j in 0..h {
+                let row_a =
+                    &ref_plane[(sy + j) * ref_stride + sx..(sy + j) * ref_stride + sx + w + 1];
+                let row_b = &ref_plane
+                    [(sy + j + 1) * ref_stride + sx..(sy + j + 1) * ref_stride + sx + w + 1];
+                let out = &mut dst[j * dst_stride..j * dst_stride + w];
+                for i in 0..w {
+                    out[i] = ((row_a[i] as u32
+                        + row_a[i + 1] as u32
+                        + row_b[i] as u32
+                        + row_b[i + 1] as u32
+                        + 2)
+                        >> 2) as u8;
+                }
+            }
         }
     }
 }
