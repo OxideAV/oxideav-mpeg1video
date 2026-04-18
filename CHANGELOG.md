@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/OxideAV/oxideav-mpeg12video/compare/v0.0.4...v0.0.5) - 2026-04-18
+
+### Other
+
+- document decoder-path optimizations + bench numbers
+- add MC unclipped fast path (~-6% MPEG-1 inter decode)
+- release v0.0.3
+
 ## [0.0.4](https://github.com/OxideAV/oxideav-mpeg12video/releases/tag/v0.0.4) - 2026-04-18
 
 ### Other
