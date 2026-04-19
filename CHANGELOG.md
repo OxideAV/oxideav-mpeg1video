@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/OxideAV/oxideav-mpeg12video/compare/v0.0.5...v0.0.6) - 2026-04-19
+
+### Other
+
+- drop Cargo.lock — this crate is a library
+- bump oxideav-core / oxideav-codec dep examples to "0.1"
+- bump to oxideav-core 0.1.1 + codec 0.1.1
+- migrate register() to CodecInfo builder
+- bump oxideav-core + oxideav-codec deps to "0.1"
+- claim AVI FourCCs via oxideav-codec CodecTag registry
+- bump oxideav-core to 0.0.5
+- migrate to oxideav_core::bits shared BitReader / BitWriter
+
 ## [0.0.5](https://github.com/OxideAV/oxideav-mpeg12video/compare/v0.0.4...v0.0.5) - 2026-04-18
 
 ### Other
