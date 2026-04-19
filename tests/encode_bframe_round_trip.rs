@@ -137,7 +137,7 @@ fn picture_types_in_decode_order(bytes: &[u8]) -> Vec<PictureType> {
     let mut out = Vec::new();
     for (pos, code) in start_codes::iter_start_codes(bytes) {
         if code == PICTURE_START_CODE {
-            let mut br = oxideav_mpeg12video::bitreader::BitReader::new(&bytes[pos + 4..]);
+            let mut br = oxideav_core::bits::BitReader::new(&bytes[pos + 4..]);
             if let Ok(ph) = parse_picture_header(&mut br) {
                 out.push(ph.picture_type);
             }

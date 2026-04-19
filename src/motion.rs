@@ -26,9 +26,9 @@
 
 use oxideav_core::Result;
 
-use crate::bitreader::BitReader;
 use crate::tables::motion;
 use crate::vlc;
+use oxideav_core::bits::BitReader;
 
 /// Motion vector predictor state, reset at slice boundaries and whenever a
 /// non-intra macroblock without a forward/backward vector is encountered.

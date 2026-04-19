@@ -16,7 +16,7 @@
 
 use oxideav_core::{Error, Result};
 
-use crate::bitreader::BitReader;
+use oxideav_core::bits::BitReader;
 
 /// One entry in a VLC table. `code` occupies the low `bits` bits (MSB-first).
 #[derive(Clone, Copy, Debug)]

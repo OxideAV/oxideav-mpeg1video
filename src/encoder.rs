@@ -40,7 +40,6 @@ use oxideav_core::{
     TimeBase, VideoFrame,
 };
 
-use crate::bitwriter::BitWriter;
 use crate::coding_mode::Codec;
 use crate::dct::{fdct8x8, idct8x8};
 use crate::headers::{DEFAULT_INTRA_QUANT, DEFAULT_NON_INTRA_QUANT, ZIGZAG};
@@ -58,6 +57,7 @@ use crate::tables::mba;
 use crate::tables::motion as mv_tbl;
 use crate::tables::{cbp as cbp_tbl, mb_type};
 use crate::vlc::VlcEntry;
+use oxideav_core::bits::BitWriter;
 
 /// Default fixed quantiser scale. The lower this is, the finer the
 /// quantisation step (less coding loss, more bits per frame).
@@ -2499,9 +2499,9 @@ fn encode_mb_intra_throwaway(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bitreader::BitReader;
     use crate::tables::dct_dc;
     use crate::vlc;
+    use oxideav_core::bits::BitReader;
 
     #[test]
     fn signed_field_round_trip_dc() {

@@ -9,13 +9,13 @@
 
 use oxideav_core::{Error, Result};
 
-use crate::bitreader::BitReader;
 use crate::coding_mode::PictureParams;
 use crate::dct::idct8x8;
 use crate::headers::ZIGZAG;
 use crate::tables::dct_coeffs::{self, DctSym};
 use crate::tables::dct_dc;
 use crate::vlc;
+use oxideav_core::bits::BitReader;
 
 /// Sign-extend an `size`-bit unsigned DC-differential value to i32.
 fn extend_dc(value: u32, size: u32) -> i32 {

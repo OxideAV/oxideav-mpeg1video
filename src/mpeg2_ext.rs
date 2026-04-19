@@ -20,9 +20,9 @@
 
 use oxideav_core::Result;
 
-use crate::bitreader::BitReader;
-use crate::bitwriter::BitWriter;
 use crate::start_codes;
+use oxideav_core::bits::BitReader;
+use oxideav_core::bits::BitWriter;
 
 /// `sequence_extension()` from H.262 §6.2.2.3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

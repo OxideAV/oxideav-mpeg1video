@@ -3,8 +3,8 @@
 
 use oxideav_core::{Error, Result};
 
-use crate::bitreader::BitReader;
 use crate::mpeg2_ext::{Mpeg2PictureCodingExt, Mpeg2SequenceExt};
+use oxideav_core::bits::BitReader;
 
 /// Decoded sequence header fields. The `mpeg2_seq` field is populated by the
 /// decoder when an MPEG-2 `sequence_extension` follows the MPEG-1-compatible

@@ -2,7 +2,6 @@
 
 use oxideav_core::{Error, Result};
 
-use crate::bitreader::BitReader;
 use crate::block::{copy_prediction, decode_intra_block, decode_non_intra_block};
 use crate::coding_mode::{PictureParams, AXIS_H, AXIS_V, DIR_BWD, DIR_FWD};
 use crate::headers::{PictureHeader, PictureType, SequenceHeader};
@@ -10,6 +9,7 @@ use crate::motion::{self, MvPredictor};
 use crate::picture::PictureBuffer;
 use crate::tables::{cbp, mb_type, mba};
 use crate::vlc;
+use oxideav_core::bits::BitReader;
 
 /// Running slice-decode state carried between macroblocks.
 pub struct SliceState {

@@ -8,7 +8,6 @@ use oxideav_core::{
     CodecId, CodecParameters, Error, Frame, Packet, Rational, Result, TimeBase, VideoFrame,
 };
 
-use crate::bitreader::BitReader;
 use crate::coding_mode::{Codec, PictureParams};
 use crate::headers::{
     frame_rate_for_code, parse_gop_header, parse_picture_header, parse_sequence_header, GopHeader,
@@ -21,6 +20,7 @@ use crate::start_codes::{
     self, EXTENSION_START_CODE, GROUP_START_CODE, SEQUENCE_END_CODE, SEQUENCE_ERROR_CODE,
     SEQUENCE_HEADER_CODE, USER_DATA_START_CODE,
 };
+use oxideav_core::bits::BitReader;
 
 /// Factory for the registry — MPEG-1.
 pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {

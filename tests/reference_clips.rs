@@ -17,9 +17,8 @@
 
 use std::path::Path;
 
-use oxideav_core::{CodecId, CodecParameters, Error, Frame, Packet, TimeBase};
+use oxideav_core::{bits::BitReader, CodecId, CodecParameters, Error, Frame, Packet, TimeBase};
 use oxideav_mpeg12video::{
-    bitreader::BitReader,
     decoder::{codec_parameters_from_sequence_header, make_decoder},
     headers::{parse_sequence_header, PictureType},
     start_codes::{self, PICTURE_START_CODE, SEQUENCE_HEADER_CODE},

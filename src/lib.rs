@@ -37,8 +37,6 @@
 
 #![allow(clippy::needless_range_loop)]
 
-pub mod bitreader;
-pub mod bitwriter;
 pub mod block;
 pub mod coding_mode;
 pub mod dct;
