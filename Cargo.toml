@@ -17,7 +17,7 @@ categories = ["multimedia::encoding", "multimedia::video"]
 oxideav-core = "0.1"
 oxideav-codec = "0.1"
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "dct_bench"
