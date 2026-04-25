@@ -51,8 +51,8 @@ pub mod start_codes;
 pub mod tables;
 pub mod vlc;
 
-use oxideav_codec::{CodecInfo, CodecRegistry};
 use oxideav_core::{CodecCapabilities, CodecId, CodecTag};
+use oxideav_core::{CodecInfo, CodecRegistry};
 
 pub const CODEC_ID_STR: &str = "mpeg1video";
 pub const CODEC_ID_MPEG2_STR: &str = "mpeg2video";
