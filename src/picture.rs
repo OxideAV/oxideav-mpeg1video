@@ -1,7 +1,7 @@
 //! Picture-level assembly buffers (Y / Cb / Cr) + display-order reorder.
 
 use oxideav_core::frame::VideoPlane;
-use oxideav_core::{PixelFormat, TimeBase, VideoFrame};
+use oxideav_core::{TimeBase, VideoFrame};
 
 use crate::headers::PictureType;
 
@@ -50,7 +50,7 @@ impl PictureBuffer {
 
     /// Copy the MB-aligned luma / chroma buffers into a tight `VideoFrame`
     /// with no padding.
-    pub fn to_video_frame(&self, pts: Option<i64>, time_base: TimeBase) -> VideoFrame {
+    pub fn to_video_frame(&self, pts: Option<i64>, _time_base: TimeBase) -> VideoFrame {
         let w = self.width;
         let h = self.height;
         let cw = w.div_ceil(2);
@@ -69,11 +69,7 @@ impl PictureBuffer {
                 .copy_from_slice(&self.cr[row * self.c_stride..row * self.c_stride + cw]);
         }
         VideoFrame {
-            format: PixelFormat::Yuv420P,
-            width: w as u32,
-            height: h as u32,
             pts,
-            time_base,
             planes: vec![
                 VideoPlane { stride: w, data: y },
                 VideoPlane {

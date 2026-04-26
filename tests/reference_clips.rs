@@ -94,8 +94,6 @@ fn decode_first_i_frame_tiny() {
 
     match frame {
         Frame::Video(vf) => {
-            assert_eq!(vf.width, 64);
-            assert_eq!(vf.height, 64);
             assert_eq!(vf.planes.len(), 3);
             let y_plane = &vf.planes[0];
             let mean_y: u64 =

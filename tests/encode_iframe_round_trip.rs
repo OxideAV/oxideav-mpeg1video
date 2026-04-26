@@ -47,11 +47,7 @@ fn read_yuv_one_frame(path: &str, w: u32, h: u32) -> Option<VideoFrame> {
     let cb = bytes[y_size..y_size + c_size].to_vec();
     let cr = bytes[y_size + c_size..y_size + 2 * c_size].to_vec();
     Some(VideoFrame {
-        format: PixelFormat::Yuv420P,
-        width: w,
-        height: h,
         pts: Some(0),
-        time_base: TimeBase::new(1, 24),
         planes: vec![
             VideoPlane {
                 stride: w as usize,
@@ -109,8 +105,6 @@ fn decode_one(bytes: &[u8]) -> VideoFrame {
 }
 
 fn pixel_match(orig: &VideoFrame, recon: &VideoFrame, tolerance: i32) -> f64 {
-    assert_eq!(orig.width, recon.width);
-    assert_eq!(orig.height, recon.height);
     assert_eq!(orig.planes.len(), recon.planes.len());
     let mut total: u64 = 0;
     let mut matched: u64 = 0;

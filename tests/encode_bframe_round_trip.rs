@@ -19,7 +19,7 @@ use oxideav_mpeg12video::{
     CODEC_ID_STR,
 };
 
-fn synth_frame(w: u32, h: u32, t: usize, pts: i64, tb: TimeBase) -> VideoFrame {
+fn synth_frame(w: u32, h: u32, t: usize, pts: i64, _tb: TimeBase) -> VideoFrame {
     let cw = w.div_ceil(2);
     let ch = h.div_ceil(2);
     let mut y = vec![0u8; (w * h) as usize];
@@ -41,11 +41,7 @@ fn synth_frame(w: u32, h: u32, t: usize, pts: i64, tb: TimeBase) -> VideoFrame {
         }
     }
     VideoFrame {
-        format: PixelFormat::Yuv420P,
-        width: w,
-        height: h,
         pts: Some(pts),
-        time_base: tb,
         planes: vec![
             VideoPlane {
                 stride: w as usize,
@@ -63,9 +59,7 @@ fn synth_frame(w: u32, h: u32, t: usize, pts: i64, tb: TimeBase) -> VideoFrame {
     }
 }
 
-fn encode_bframes(frames: &[VideoFrame], gop_size: u32, num_b: u32) -> Vec<u8> {
-    let w = frames[0].width;
-    let h = frames[0].height;
+fn encode_bframes(frames: &[VideoFrame], w: u32, h: u32, gop_size: u32, num_b: u32) -> Vec<u8> {
     let mut params = CodecParameters::video(CodecId::new(CODEC_ID_STR));
     params.width = Some(w);
     params.height = Some(h);
@@ -161,7 +155,7 @@ fn ibpbp_round_trip_psnr_and_order() {
         frames.push(synth_frame(w, h, t, t as i64, tb));
     }
 
-    let bytes = encode_bframes(&frames, 5, 1);
+    let bytes = encode_bframes(&frames, w, h, 5, 1);
     eprintln!("encoded {} bytes for IBPBP 5-frame seq", bytes.len());
     assert!(!bytes.is_empty());
     assert_eq!(&bytes[..4], &[0x00, 0x00, 0x01, 0xB3]);
@@ -224,7 +218,7 @@ fn default_gop_emits_b_frames() {
     }
     // gop_size=9 with num_b=2 → IBBPBBPBB. 12 frames = one full GOP + IBB of
     // the next GOP (trailing Bs promoted to Ps on flush if no next anchor).
-    let bytes = encode_bframes(&frames, 9, 2);
+    let bytes = encode_bframes(&frames, w, h, 9, 2);
     let types = picture_types_in_decode_order(&bytes);
     eprintln!("12-frame default IBBP decode-order types: {types:?}");
     let b_count = types.iter().filter(|t| matches!(t, PictureType::B)).count();

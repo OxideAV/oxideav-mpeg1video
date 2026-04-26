@@ -57,11 +57,7 @@ fn read_yuv_n_frames(path: &str, w: u32, h: u32, n: usize) -> Option<Vec<VideoFr
         let cb = bytes[base + y_size..base + y_size + c_size].to_vec();
         let cr = bytes[base + y_size + c_size..base + frame_size].to_vec();
         out.push(VideoFrame {
-            format: PixelFormat::Yuv420P,
-            width: w,
-            height: h,
             pts: Some(i as i64),
-            time_base: TimeBase::new(1, 24),
             planes: vec![
                 VideoPlane {
                     stride: w as usize,
@@ -152,8 +148,6 @@ fn decode_frames(bytes: &[u8]) -> Vec<VideoFrame> {
 }
 
 fn pixel_match(orig: &VideoFrame, recon: &VideoFrame, tolerance: i32) -> f64 {
-    assert_eq!(orig.width, recon.width);
-    assert_eq!(orig.height, recon.height);
     assert_eq!(orig.planes.len(), recon.planes.len());
     let mut total: u64 = 0;
     let mut matched: u64 = 0;
@@ -285,11 +279,7 @@ fn ibppp_psnr_over_30db() {
             }
         }
         frames.push(VideoFrame {
-            format: PixelFormat::Yuv420P,
-            width: w,
-            height: h,
             pts: Some(t as i64),
-            time_base: TimeBase::new(1, 24),
             planes: vec![
                 VideoPlane {
                     stride: w as usize,

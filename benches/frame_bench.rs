@@ -44,11 +44,7 @@ fn synth_frame() -> VideoFrame {
         }
     }
     VideoFrame {
-        format: PixelFormat::Yuv420P,
-        width: W,
-        height: H,
         pts: Some(0),
-        time_base: TimeBase::new(1, 25),
         planes: vec![
             VideoPlane { stride: w, data: y },
             VideoPlane {

@@ -307,16 +307,6 @@ impl Encoder for Mpeg1VideoEncoder {
             Frame::Video(v) => v,
             _ => return Err(Error::invalid("MPEG-1 encoder: video frames only")),
         };
-        if v.width != self.width || v.height != self.height {
-            return Err(Error::invalid(
-                "MPEG-1 encoder: frame dimensions do not match encoder config",
-            ));
-        }
-        if v.format != PixelFormat::Yuv420P {
-            return Err(Error::invalid(
-                "MPEG-1 encoder: only Yuv420P input frames supported",
-            ));
-        }
         if v.planes.len() != 3 {
             return Err(Error::invalid("MPEG-1 encoder: expected 3 planes"));
         }
@@ -751,8 +741,8 @@ fn encode_mb_intra(
     let q = enc.quant_scale as i32;
     let intra_q = &DEFAULT_INTRA_QUANT;
 
-    let w = v.width as usize;
-    let h = v.height as usize;
+    let w = enc.width as usize;
+    let h = enc.height as usize;
     let cw = w.div_ceil(2);
     let ch = h.div_ceil(2);
 
@@ -1272,8 +1262,8 @@ fn mb_motion_search(
         return ((0, 0), u32::MAX, u32::MAX, u32::MAX);
     }
     let y_plane = &v.planes[0];
-    let w = v.width as i32;
-    let h = v.height as i32;
+    let w = enc.width as i32;
+    let h = enc.height as i32;
 
     let x0 = (mb_col * 16) as i32;
     let y0 = (mb_row * 16) as i32;
@@ -1656,8 +1646,8 @@ fn quantise_p_mb_residual(
     let q = enc.quant_scale as i32;
     let non_intra_q = &DEFAULT_NON_INTRA_QUANT;
 
-    let w = v.width as usize;
-    let h = v.height as usize;
+    let w = enc.width as usize;
+    let h = enc.height as usize;
     let cw = w.div_ceil(2);
     let ch = h.div_ceil(2);
 
@@ -2189,12 +2179,13 @@ fn encode_slice_b(
         // Motion search against each reference. The forward reference is
         // `prev_ref_*`, the backward reference is `ref_*`.
         let (fwd_best, fwd_sad, _, intra_dev) =
-            motion_search_against(v, mb_row, mb_col, &enc.prev_ref_y, enc.prev_ref_y_stride);
+            motion_search_against(enc, v, mb_row, mb_col, &enc.prev_ref_y, enc.prev_ref_y_stride);
         let (bwd_best, bwd_sad, _, _) =
-            motion_search_against(v, mb_row, mb_col, &enc.ref_y, enc.ref_y_stride);
+            motion_search_against(enc, v, mb_row, mb_col, &enc.ref_y, enc.ref_y_stride);
 
         // Bidirectional SAD: average of the two reference patches.
         let bi_sad = bi_sad_for(
+            enc,
             v,
             mb_row,
             mb_col,
@@ -2285,6 +2276,7 @@ fn encode_slice_b(
 ///
 /// Returns `(best_mv, sad_at_best, sad_at_zero, intra_dev)`.
 fn motion_search_against(
+    enc: &Mpeg1VideoEncoder,
     v: &VideoFrame,
     mb_row: usize,
     mb_col: usize,
@@ -2295,8 +2287,8 @@ fn motion_search_against(
         return ((0, 0), u32::MAX, u32::MAX, u32::MAX);
     }
     let y_plane = &v.planes[0];
-    let w = v.width as i32;
-    let h = v.height as i32;
+    let w = enc.width as i32;
+    let h = enc.height as i32;
 
     let x0 = (mb_col * 16) as i32;
     let y0 = (mb_row * 16) as i32;
@@ -2412,6 +2404,7 @@ fn motion_search_against(
 /// average with rounding, compare to the current samples.
 #[allow(clippy::too_many_arguments)]
 fn bi_sad_for(
+    enc: &Mpeg1VideoEncoder,
     v: &VideoFrame,
     mb_row: usize,
     mb_col: usize,
@@ -2425,8 +2418,8 @@ fn bi_sad_for(
     bwd_mv_y: i32,
 ) -> u32 {
     let y_plane = &v.planes[0];
-    let w = v.width as i32;
-    let h = v.height as i32;
+    let w = enc.width as i32;
+    let h = enc.height as i32;
     let x0 = (mb_col * 16) as i32;
     let y0 = (mb_row * 16) as i32;
 

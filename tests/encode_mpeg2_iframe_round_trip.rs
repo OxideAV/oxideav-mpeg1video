@@ -56,11 +56,7 @@ fn synth_frame(idx: u32) -> VideoFrame {
         }
     }
     VideoFrame {
-        format: PixelFormat::Yuv420P,
-        width: W,
-        height: H,
         pts: Some(idx as i64),
-        time_base: TimeBase::new(1, 25),
         planes: vec![
             VideoPlane { stride: w, data: y },
             VideoPlane {
@@ -139,8 +135,6 @@ fn mean_abs_diff(orig: &VideoFrame, recon: &VideoFrame) -> f64 {
 }
 
 fn pixel_match(orig: &VideoFrame, recon: &VideoFrame, tolerance: i32) -> f64 {
-    assert_eq!(orig.width, recon.width);
-    assert_eq!(orig.height, recon.height);
     let mut total: u64 = 0;
     let mut matched: u64 = 0;
     for (o, r) in orig.planes.iter().zip(recon.planes.iter()) {

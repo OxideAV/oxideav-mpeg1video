@@ -21,11 +21,7 @@ fn tiny_frame() -> VideoFrame {
     let cw = 16usize;
     let ch = 16usize;
     VideoFrame {
-        format: PixelFormat::Yuv420P,
-        width: w as u32,
-        height: h as u32,
         pts: Some(0),
-        time_base: TimeBase::new(1, 25),
         planes: vec![
             VideoPlane {
                 stride: w,
@@ -45,8 +41,8 @@ fn tiny_frame() -> VideoFrame {
 
 fn encode_one_mpeg2(frame: &VideoFrame) -> Vec<u8> {
     let mut params = CodecParameters::video(CodecId::new(CODEC_ID_MPEG2_STR));
-    params.width = Some(frame.width);
-    params.height = Some(frame.height);
+    params.width = Some(32);
+    params.height = Some(32);
     params.pixel_format = Some(PixelFormat::Yuv420P);
     params.frame_rate = Some(Rational::new(25, 1));
     params.bit_rate = Some(1_000_000);
