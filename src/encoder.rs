@@ -2178,8 +2178,14 @@ fn encode_slice_b(
     for mb_col in 0..mb_w {
         // Motion search against each reference. The forward reference is
         // `prev_ref_*`, the backward reference is `ref_*`.
-        let (fwd_best, fwd_sad, _, intra_dev) =
-            motion_search_against(enc, v, mb_row, mb_col, &enc.prev_ref_y, enc.prev_ref_y_stride);
+        let (fwd_best, fwd_sad, _, intra_dev) = motion_search_against(
+            enc,
+            v,
+            mb_row,
+            mb_col,
+            &enc.prev_ref_y,
+            enc.prev_ref_y_stride,
+        );
         let (bwd_best, bwd_sad, _, _) =
             motion_search_against(enc, v, mb_row, mb_col, &enc.ref_y, enc.ref_y_stride);
 
