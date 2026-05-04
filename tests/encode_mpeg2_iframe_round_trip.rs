@@ -201,6 +201,106 @@ fn mpeg2_iframe_round_trip_3_frames() {
     }
 }
 
+/// Cross-validate our MPEG-2 I-only output against ffmpeg as a black-box
+/// decoder. Skips silently when ffmpeg is unavailable so CI without it stays
+/// green.
+#[test]
+fn ffmpeg_decodes_our_mpeg2_output() {
+    if which("ffmpeg").is_none() {
+        eprintln!("ffmpeg not found — skipping mpeg2 ffmpeg interop test");
+        return;
+    }
+    let frames: Vec<VideoFrame> = (0..2).map(synth_frame).collect();
+    let bytes = encode_frames(&frames);
+
+    let in_path = "/tmp/mpeg2_oxideav.m2v";
+    let out_path = "/tmp/mpeg2_oxideav_decoded.yuv";
+    std::fs::write(in_path, &bytes).expect("write encoded m2v");
+    let _ = std::fs::remove_file(out_path);
+
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "mpegvideo",
+            "-i",
+            in_path,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "yuv420p",
+            out_path,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("spawn ffmpeg");
+    assert!(status.success(), "ffmpeg failed to decode our MPEG-2 output");
+
+    // Read back the first decoded frame from raw YUV.
+    let raw = std::fs::read(out_path).expect("read ffmpeg output");
+    let w = W as usize;
+    let h = H as usize;
+    let cw = w / 2;
+    let ch = h / 2;
+    let frame_size = w * h + 2 * cw * ch;
+    assert!(
+        raw.len() >= frame_size,
+        "ffmpeg output too short: {} < {}",
+        raw.len(),
+        frame_size
+    );
+    let ff = VideoFrame {
+        pts: Some(0),
+        planes: vec![
+            VideoPlane {
+                stride: w,
+                data: raw[..w * h].to_vec(),
+            },
+            VideoPlane {
+                stride: cw,
+                data: raw[w * h..w * h + cw * ch].to_vec(),
+            },
+            VideoPlane {
+                stride: cw,
+                data: raw[w * h + cw * ch..w * h + 2 * cw * ch].to_vec(),
+            },
+        ],
+    };
+
+    let mad = mean_abs_diff(&frames[0], &ff);
+    let pct16 = pixel_match(&frames[0], &ff, 16) * 100.0;
+    let pct32 = pixel_match(&frames[0], &ff, 32) * 100.0;
+    eprintln!(
+        "ffmpeg-decoded MPEG-2 round-trip MAD={mad:.2}, pct(±16)={pct16:.2}%, pct(±32)={pct32:.2}%"
+    );
+    // ffmpeg uses an integer IDCT; ours is f32. The bitstream is conformant
+    // (ffmpeg parses + decodes it without complaint), but per-pixel rounding
+    // diverges. ±32 / 90% is enough to assert we produced a real MPEG-2
+    // stream and not a bag of bytes.
+    assert!(
+        pct32 >= 90.0,
+        "ffmpeg MPEG-2 round-trip ≤±32 match {pct32:.2}% < 90% (MAD={mad:.2})"
+    );
+}
+
+fn which(prog: &str) -> Option<String> {
+    let p = std::process::Command::new("which")
+        .arg(prog)
+        .output()
+        .ok()?;
+    if p.status.success() {
+        let s = String::from_utf8_lossy(&p.stdout).trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    } else {
+        None
+    }
+}
+
 #[test]
 fn mpeg2_encoder_rejects_b_frames_and_long_gop() {
     let mut params = CodecParameters::video(CodecId::new(CODEC_ID_MPEG2_STR));

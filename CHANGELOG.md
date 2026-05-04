@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Both the slice-header code and per-MB `quantiser_scale_code` overrides are
   routed through the new lookup. Previously rejected with
   `Error::Unsupported`.
+- Test: `ffmpeg_decodes_our_mpeg2_output` cross-validates our MPEG-2 I-only
+  encoder against ffmpeg as a black-box decoder (skips silently when ffmpeg
+  is unavailable).
 
 ## [0.0.9](https://github.com/OxideAV/oxideav-mpeg12video/compare/v0.0.8...v0.0.9) - 2026-05-03
 
