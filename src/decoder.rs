@@ -402,11 +402,6 @@ fn build_picture_params(
                     "mpeg2video: intra_vlc_format=1 (Table B-15) not supported",
                 ));
             }
-            if pic_ext.q_scale_type {
-                return Err(Error::unsupported(
-                    "mpeg2video: non-linear q_scale not supported",
-                ));
-            }
             if !pic_ext.frame_pred_frame_dct {
                 return Err(Error::unsupported(
                     "mpeg2video: field-DCT / field-MC not supported",
@@ -422,7 +417,7 @@ fn build_picture_params(
                 intra_dc_precision: pic_ext.intra_dc_precision,
                 alternate_scan: pic_ext.alternate_scan,
                 intra_vlc_format: false,
-                q_scale_type: false,
+                q_scale_type: pic_ext.q_scale_type,
                 f_code: pic_ext.f_code,
                 full_pel_fwd: false,
                 full_pel_bwd: false,

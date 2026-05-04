@@ -104,6 +104,45 @@ fn decode_expect_unsupported(data: &[u8]) -> String {
     }
 }
 
+/// `q_scale_type = 1` is now accepted by the decoder (Table 7-6 lookup
+/// coverage lives in `coding_mode::tests::quantiser_scale_linear_vs_nonlinear`).
+/// With the encoder's default `quantiser_scale_code = 3`, Table 7-6 maps to
+/// scale = 3 — same as the linear path — so a constant-grey stream with the
+/// `q_scale_type` bit flipped reconstructs identical pixels.
+#[test]
+fn accepts_q_scale_type_for_dc_only_stream() {
+    let frame = tiny_frame();
+    let mut bytes = encode_one_mpeg2(&frame);
+    // picture_coding_extension byte 3 layout (MSB → LSB):
+    //   tff fpfdct conceal qst ivlc altscan rff c420
+    // Default: 1100_0001 = 0xC1. Set q_scale_type (bit 4): 0xD1.
+    let ext_start = picture_coding_ext_start(&bytes);
+    assert_eq!(
+        bytes[ext_start + 3],
+        0xC1,
+        "unexpected pic-coding-ext byte3"
+    );
+    bytes[ext_start + 3] = 0xD1;
+
+    let params = CodecParameters::video(CodecId::new(CODEC_ID_MPEG2_STR));
+    let mut dec = make_decoder_mpeg2(&params).expect("build mpeg2 decoder");
+    let pkt = Packet::new(0, TimeBase::new(1, 25), bytes);
+    dec.send_packet(&pkt).expect("send_packet");
+    dec.flush().expect("flush");
+    let frame = match dec.receive_frame() {
+        Ok(Frame::Video(v)) => v,
+        other => panic!("expected one VideoFrame, got {other:?}"),
+    };
+    for plane in &frame.planes {
+        for &p in &plane.data {
+            assert!(
+                (p as i32 - 128).abs() <= 2,
+                "q_scale_type flipped a DC-only block: pixel {p}"
+            );
+        }
+    }
+}
+
 /// `alternate_scan = 1` is now accepted by the decoder (round-trip coverage
 /// for the scan path lives in the block-level unit tests). With a constant
 /// 128-grey input every block has only a DC coefficient, so the AC scan

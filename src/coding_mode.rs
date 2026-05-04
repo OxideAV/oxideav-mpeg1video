@@ -33,6 +33,16 @@ pub const DIR_BWD: usize = 1;
 pub const AXIS_H: usize = 0;
 pub const AXIS_V: usize = 1;
 
+/// H.262 §7.4.2.2 Table 7-6: non-linear `quantiser_scale_code` →
+/// `quantiser_scale` map, used when `picture_coding_extension.q_scale_type = 1`.
+/// `code = 0` is invalid (slice header forbids it); we map it to 1 to keep
+/// downstream arithmetic well-defined and match the existing fallback used
+/// by [`PictureParams::quantiser_scale`].
+const NON_LINEAR_QUANT_SCALE: [u8; 32] = [
+    1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 40, 44, 48, 52, 56, 64,
+    72, 80, 88, 96, 104, 112,
+];
+
 /// Per-picture coding parameters.
 ///
 /// `f_code[direction][axis]` stores motion-vector f-codes for
@@ -54,8 +64,8 @@ pub struct PictureParams {
     /// First-pass decoder rejects this; first-pass encoder never emits it.
     pub intra_vlc_format: bool,
     /// MPEG-2 `q_scale_type` — if set, use the non-linear quantiser-scale
-    /// table. First-pass decoder rejects this; first-pass encoder never
-    /// emits it.
+    /// table from H.262 §7.4.2.2 Table 7-6. Decoder honours this flag per
+    /// picture; encoder does not currently emit it.
     pub q_scale_type: bool,
     pub f_code: [[u8; 2]; 2],
     pub full_pel_fwd: bool,
@@ -94,6 +104,21 @@ impl PictureParams {
                 3 => 1,
                 _ => 8,
             },
+        }
+    }
+
+    /// Resolve a 5-bit `quantiser_scale_code` (1..=31) to the actual
+    /// `quantiser_scale` for this picture.
+    ///
+    /// MPEG-1 and MPEG-2 with `q_scale_type = 0` (the linear path) treat the
+    /// code as the scale itself; MPEG-2 with `q_scale_type = 1` looks the
+    /// code up in H.262 Table 7-6, which lets the scale rise as high as 112
+    /// at the cost of resolution at low scales.
+    pub fn quantiser_scale(&self, code: u8) -> u8 {
+        if self.is_mpeg2() && self.q_scale_type {
+            NON_LINEAR_QUANT_SCALE[code as usize]
+        } else {
+            code
         }
     }
 
@@ -140,6 +165,46 @@ mod tests {
         assert_eq!(p.intra_dc_reset_value(), 512);
         p.intra_dc_precision = 3;
         assert_eq!(p.intra_dc_reset_value(), 1024);
+    }
+
+    #[test]
+    fn quantiser_scale_linear_vs_nonlinear() {
+        // MPEG-1 ignores q_scale_type — code is the scale.
+        let p1 = PictureParams {
+            codec: Codec::Mpeg1,
+            intra_dc_precision: 0,
+            alternate_scan: false,
+            intra_vlc_format: false,
+            q_scale_type: false,
+            f_code: [[1, 1], [1, 1]],
+            full_pel_fwd: false,
+            full_pel_bwd: false,
+        };
+        for code in 1u8..=31 {
+            assert_eq!(p1.quantiser_scale(code), code, "MPEG-1 code {code}");
+        }
+
+        // MPEG-2 with q_scale_type=0 also linear.
+        let p2_lin = PictureParams {
+            codec: Codec::Mpeg2,
+            ..p1
+        };
+        for code in 1u8..=31 {
+            assert_eq!(p2_lin.quantiser_scale(code), code, "MPEG-2 lin {code}");
+        }
+
+        // MPEG-2 with q_scale_type=1 follows H.262 Table 7-6.
+        let p2_nl = PictureParams {
+            codec: Codec::Mpeg2,
+            q_scale_type: true,
+            ..p1
+        };
+        // Spot-check a few entries known to differ from the linear path.
+        assert_eq!(p2_nl.quantiser_scale(1), 1);
+        assert_eq!(p2_nl.quantiser_scale(8), 8);
+        assert_eq!(p2_nl.quantiser_scale(9), 10); // first divergence
+        assert_eq!(p2_nl.quantiser_scale(16), 24);
+        assert_eq!(p2_nl.quantiser_scale(31), 112); // ceiling
     }
 
     #[test]

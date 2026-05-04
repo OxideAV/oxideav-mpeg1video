@@ -60,11 +60,12 @@ Decoder coverage:
 - Sequence header, GOP header, picture header, slice / macroblock / block
   layers.
 - MPEG-2 `sequence_extension` and `picture_coding_extension` parsing
-  (progressive Main Profile @ Main Level 4:2:0). `alternate_scan` is
-  honoured per picture (H.262 Figure 7-3). Unsupported features
-  (interlaced, 4:2:2/4:4:4, `intra_vlc_format=1`, non-linear `q_scale_type`,
-  field / dual-prime / 16×8 MVs, concealment MVs, scalable extensions)
-  are rejected with a clear `Error::Unsupported` rather than mis-decoded.
+  (progressive Main Profile @ Main Level 4:2:0). `alternate_scan`
+  (H.262 Figure 7-3) and the non-linear `q_scale_type = 1` quantiser-scale
+  table (H.262 Table 7-6) are honoured per picture. Unsupported features
+  (interlaced, 4:2:2/4:4:4, `intra_vlc_format=1`, field / dual-prime /
+  16×8 MVs, concealment MVs, scalable extensions) are rejected with a
+  clear `Error::Unsupported` rather than mis-decoded.
 - Picture types I, P, B (D-pictures are rejected — obsolete, MPEG-1 only).
 - Forward + backward motion compensation with half-pel bilinear
   interpolation; interpolated (averaged) B-frame prediction.

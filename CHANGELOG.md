@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MPEG-2 decoder: honour `alternate_scan` per picture (H.262 §7.3 Figure 7-3
   / `scan[1][]`). Streams with `picture_coding_extension.alternate_scan = 1`
   are now decoded instead of returning `Error::Unsupported`.
+- MPEG-2 decoder: honour `q_scale_type = 1` per picture, mapping the 5-bit
+  `quantiser_scale_code` through H.262 §7.4.2.2 Table 7-6 (range up to 112).
+  Both the slice-header code and per-MB `quantiser_scale_code` overrides are
+  routed through the new lookup. Previously rejected with
+  `Error::Unsupported`.
 
 ## [0.0.9](https://github.com/OxideAV/oxideav-mpeg12video/compare/v0.0.8...v0.0.9) - 2026-05-03
 

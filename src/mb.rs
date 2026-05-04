@@ -54,11 +54,10 @@ pub fn decode_slice(
     bwd_ref: Option<&PictureBuffer>,
 ) -> Result<()> {
     let picture_type = pic_hdr.picture_type;
-    // Quantiser_scale (5 bits).
-    let mut quant_scale = br.read_u32(5)? as u8;
-    if quant_scale == 0 {
-        quant_scale = 1;
-    }
+    // `slice_quantiser_scale_code` (5 bits). For MPEG-2 with q_scale_type=1
+    // the code is mapped through Table 7-6; otherwise it is the scale itself.
+    let qsc = br.read_u32(5)? as u8;
+    let mut quant_scale = params.quantiser_scale(qsc.max(1));
 
     // extra_bit_slice.
     while br.read_u32(1)? == 1 {
@@ -164,7 +163,7 @@ pub fn decode_slice(
         if mb_type_flags.quant {
             let qs = br.read_u32(5)? as u8;
             if qs != 0 {
-                quant_scale = qs;
+                quant_scale = params.quantiser_scale(qs);
             }
         }
 
