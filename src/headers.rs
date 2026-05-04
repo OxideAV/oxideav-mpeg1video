@@ -36,11 +36,34 @@ pub const DEFAULT_NON_INTRA_QUANT: [u8; 64] = [16; 64];
 
 /// Zig-zag scan order used for DCT coefficient transmission. Position k in
 /// the zigzag stream corresponds to natural-order index `ZIGZAG[k]`.
+///
+/// MPEG-2 (H.262 §7.3) calls this "scan[0][]" — the default zigzag.
 pub const ZIGZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
+
+/// MPEG-2 alternate scan from H.262 §7.3 Figure 7-3 (also called "scan[1][]").
+/// Selected per-picture by the `alternate_scan` flag in
+/// `picture_coding_extension`. Same convention as [`ZIGZAG`]: `ALT_SCAN[k]` is
+/// the natural-order index for scan position `k`.
+pub const ALT_SCAN: [usize; 64] = [
+    0, 8, 16, 24, 1, 9, 2, 10, 17, 25, 32, 40, 48, 56, 57, 49, 41, 33, 26, 18, 3, 11, 4, 12, 19,
+    27, 34, 42, 50, 58, 35, 43, 51, 59, 20, 28, 5, 13, 6, 14, 21, 29, 36, 44, 52, 60, 37, 45, 53,
+    61, 22, 30, 7, 15, 23, 31, 38, 46, 54, 62, 39, 47, 55, 63,
+];
+
+/// Pick the scan order for a picture. MPEG-1 always uses [`ZIGZAG`]; MPEG-2
+/// uses [`ALT_SCAN`] when `picture_coding_extension.alternate_scan = 1`.
+#[inline]
+pub fn scan_for(alternate: bool) -> &'static [usize; 64] {
+    if alternate {
+        &ALT_SCAN
+    } else {
+        &ZIGZAG
+    }
+}
 
 /// Parse the body of a sequence header (payload after the 0x000001B3 marker).
 /// `br` must be positioned immediately after the start code.

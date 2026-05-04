@@ -11,7 +11,7 @@ use oxideav_core::{Error, Result};
 
 use crate::coding_mode::PictureParams;
 use crate::dct::idct8x8;
-use crate::headers::ZIGZAG;
+use crate::headers::scan_for;
 use crate::tables::dct_coeffs::{self, DctSym};
 use crate::tables::dct_dc;
 use crate::vlc;
@@ -88,6 +88,7 @@ pub fn decode_intra_block(
     // MPEG-2 inherits the same terminator. The first-pass decoder does not
     // support `intra_vlc_format=1` (Table B-15) — it's rejected upstream.
     let ac_tbl = dct_coeffs::table();
+    let scan = scan_for(params.alternate_scan);
     let mut k: usize = 1;
     loop {
         let sym = vlc::decode(br, ac_tbl)?;
@@ -110,7 +111,8 @@ pub fn decode_intra_block(
         // Intra dequantisation:
         //   MPEG-1 §2.4.4.1:  rec = (2 * level * quant * W) / 16
         //   MPEG-2 §7.4.2.3:  rec = (level * quant * W) / 16
-        let qf = intra_quant[ZIGZAG[k]] as i32;
+        let nat = scan[k];
+        let qf = intra_quant[nat] as i32;
         let mut rec = if params.is_mpeg2() {
             (level * quant_scale as i32 * qf) / 16
         } else {
@@ -123,7 +125,7 @@ pub fn decode_intra_block(
             }
         }
         rec = rec.clamp(-2048, 2047);
-        coeffs[ZIGZAG[k]] = rec;
+        coeffs[nat] = rec;
         k += 1;
     }
 
@@ -182,6 +184,7 @@ pub fn decode_non_intra_block(
     // (run=0, level=±1).
     let first_tbl = dct_coeffs::first_coeff_table();
     let ac_tbl = dct_coeffs::table();
+    let scan = scan_for(params.alternate_scan);
 
     let mut k: usize = 0;
     let mut first = true;
@@ -219,7 +222,8 @@ pub fn decode_non_intra_block(
         // Non-intra dequantisation:
         //   MPEG-1 §2.4.4.2:  rec = ((2*level + sign(level)) * quant * W) / 16
         //   MPEG-2 §7.4.2.3:  rec = ((2*level + sign(level)) * quant * W) / 32
-        let qf = non_intra_quant[ZIGZAG[k]] as i32;
+        let nat = scan[k];
+        let qf = non_intra_quant[nat] as i32;
         let add = if level > 0 { 1 } else { -1 };
         let mut rec = if params.is_mpeg2() {
             ((2 * level + add) * quant_scale as i32 * qf) / 32
@@ -230,7 +234,7 @@ pub fn decode_non_intra_block(
             rec = if rec > 0 { rec - 1 } else { rec + 1 };
         }
         rec = rec.clamp(-2048, 2047);
-        coeffs[ZIGZAG[k]] = rec;
+        coeffs[nat] = rec;
         k += 1;
     }
 
@@ -333,5 +337,94 @@ fn apply_mpeg2_mismatch(coeffs: &mut [i32; 64]) {
         if coeffs[63] == 2048 {
             coeffs[63] = 2047;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coding_mode::{Codec, PictureParams};
+    use crate::headers::{ALT_SCAN, DEFAULT_INTRA_QUANT, ZIGZAG};
+    use oxideav_core::bits::BitWriter;
+
+    fn make_params(alternate_scan: bool) -> PictureParams {
+        PictureParams {
+            codec: Codec::Mpeg2,
+            intra_dc_precision: 0,
+            alternate_scan,
+            intra_vlc_format: false,
+            q_scale_type: false,
+            f_code: [[15, 15], [15, 15]],
+            full_pel_fwd: false,
+            full_pel_bwd: false,
+        }
+    }
+
+    /// Build a one-block MPEG-2 intra bitstream with a single AC coefficient
+    /// `+1` at zigzag scan position 1, then EOB. With `alternate_scan = false`
+    /// the level lands at natural index `ZIGZAG[1] = 1` (column 1 of row 0);
+    /// with `alternate_scan = true` it lands at `ALT_SCAN[1] = 8` (column 0
+    /// of row 1). The IDCT'd output therefore differs.
+    fn one_ac_at_scan_pos_one_bytes() -> Vec<u8> {
+        let mut bw = BitWriter::new();
+        // dc_size = 0  → DC luma codeword "100" (3 bits, Table B-12).
+        bw.write_bits(0b100, 3);
+        // (run=0, level=1) AC code "11" + positive sign "0" (Table B-14
+        // entry 0).
+        bw.write_bits(0b11, 2);
+        bw.write_bits(0, 1);
+        // EOB = "10".
+        bw.write_bits(0b10, 2);
+        bw.align_to_byte();
+        bw.finish()
+    }
+
+    #[test]
+    fn alternate_scan_places_first_ac_at_natural_index_8() {
+        // Sanity: ALT_SCAN[1] differs from ZIGZAG[1] so the test actually
+        // distinguishes the two scan paths.
+        assert_eq!(ZIGZAG[1], 1);
+        assert_eq!(ALT_SCAN[1], 8);
+
+        let bytes = one_ac_at_scan_pos_one_bytes();
+        let mut prev_dc_default: i32 = 128;
+        let mut prev_dc_alt: i32 = 128;
+        let mut out_default = [0u8; 64];
+        let mut out_alt = [0u8; 64];
+
+        let mut br = BitReader::new(&bytes);
+        decode_intra_block(
+            &mut br,
+            false,
+            &mut prev_dc_default,
+            8,
+            &DEFAULT_INTRA_QUANT,
+            &make_params(false),
+            &mut out_default,
+            8,
+        )
+        .unwrap();
+
+        let mut br = BitReader::new(&bytes);
+        decode_intra_block(
+            &mut br,
+            false,
+            &mut prev_dc_alt,
+            8,
+            &DEFAULT_INTRA_QUANT,
+            &make_params(true),
+            &mut out_alt,
+            8,
+        )
+        .unwrap();
+
+        // Same DC differential ⇒ identical post-DC predictor state.
+        assert_eq!(prev_dc_default, prev_dc_alt);
+        // Reconstructions must differ — alternate_scan put the level on a
+        // different basis function.
+        assert_ne!(
+            out_default, out_alt,
+            "alternate_scan produced identical pixels — scan dispatch broken"
+        );
     }
 }

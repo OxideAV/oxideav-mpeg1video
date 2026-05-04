@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MPEG-2 decoder: honour `alternate_scan` per picture (H.262 §7.3 Figure 7-3
+  / `scan[1][]`). Streams with `picture_coding_extension.alternate_scan = 1`
+  are now decoded instead of returning `Error::Unsupported`.
+
 ## [0.0.9](https://github.com/OxideAV/oxideav-mpeg12video/compare/v0.0.8...v0.0.9) - 2026-05-03
 
 ### Other

@@ -397,11 +397,6 @@ fn build_picture_params(
                     "mpeg2video: interlaced frame not supported",
                 ));
             }
-            if pic_ext.alternate_scan {
-                return Err(Error::unsupported(
-                    "mpeg2video: alternate_scan not supported",
-                ));
-            }
             if pic_ext.intra_vlc_format {
                 return Err(Error::unsupported(
                     "mpeg2video: intra_vlc_format=1 (Table B-15) not supported",
@@ -425,7 +420,7 @@ fn build_picture_params(
             Ok(PictureParams {
                 codec: Codec::Mpeg2,
                 intra_dc_precision: pic_ext.intra_dc_precision,
-                alternate_scan: false,
+                alternate_scan: pic_ext.alternate_scan,
                 intra_vlc_format: false,
                 q_scale_type: false,
                 f_code: pic_ext.f_code,

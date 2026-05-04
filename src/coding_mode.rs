@@ -46,8 +46,9 @@ pub struct PictureParams {
     /// MPEG-2 `intra_dc_precision` (0..=3 → 8/9/10/11-bit DC). Always 0 for
     /// MPEG-1.
     pub intra_dc_precision: u8,
-    /// MPEG-2 `alternate_scan` — if set, use the alternate zigzag. First-pass
-    /// decoder rejects this; first-pass encoder never emits it.
+    /// MPEG-2 `alternate_scan` — if set, use the alternate zigzag from
+    /// H.262 Figure 7-3 (a.k.a. `scan[1][]`). The decoder honours this flag
+    /// per picture; the encoder does not currently emit it.
     pub alternate_scan: bool,
     /// MPEG-2 `intra_vlc_format` — if set, use Table B-15 for intra AC VLC.
     /// First-pass decoder rejects this; first-pass encoder never emits it.

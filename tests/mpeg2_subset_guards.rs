@@ -104,54 +104,44 @@ fn decode_expect_unsupported(data: &[u8]) -> String {
     }
 }
 
+/// `alternate_scan = 1` is now accepted by the decoder (round-trip coverage
+/// for the scan path lives in the block-level unit tests). With a constant
+/// 128-grey input every block has only a DC coefficient, so the AC scan
+/// order is irrelevant and the bit-flipped stream still reconstructs the
+/// same pixels.
 #[test]
-fn rejects_alternate_scan() {
+fn accepts_alternate_scan_for_dc_only_stream() {
     let frame = tiny_frame();
     let mut bytes = encode_one_mpeg2(&frame);
-    // picture_coding_extension layout after the 4-bit extension id (0x8):
-    //   4×4 bits  f_code[0..4]           = 2 bytes   (offset bytes 0..2 within payload)
-    //   2 bits    intra_dc_precision
-    //   2 bits    picture_structure
-    //   1 bit     top_field_first
-    //   1 bit     frame_pred_frame_dct
-    //   1 bit     concealment_motion_vectors
-    //   1 bit     q_scale_type
-    //   1 bit     intra_vlc_format
-    //   1 bit     alternate_scan
-    //   1 bit     repeat_first_field
-    //   1 bit     chroma_420_type
-    //   1 bit     progressive_frame
-    //   1 bit     composite_display_flag
-    //
-    // First 4 bits of byte[0] are the extension ID (0x8), followed by f_code[0][0].
-    // Total: 4 (id) + 16 (f_codes) + 2 (dc_prec) + 2 (struct) + 9 flags = 33 bits →
-    //   bytes 0..4 cover the full extension, with flags packed into bytes 2-4.
-    //
-    // Rather than decode bit positions, flip the alternate_scan bit by
-    // searching for a specific pattern and XOR-ing it. But simpler: re-write
-    // the full ext payload using the bitwriter.
+    // picture_coding_extension byte 3 layout (MSB → LSB):
+    //   tff fpfdct conceal qst ivlc altscan rff c420
+    // Default: 1100_0001 = 0xC1. Set alternate_scan (bit 2): 0xC5.
     let ext_start = picture_coding_ext_start(&bytes);
-    // payload is 33 bits = 5 bytes (with 7 padding bits). Byte layout:
-    //   byte 0: ext_id (4 bits) | f_code[0][0] (4 bits) = 0x8F (f_code=15)
-    //   byte 1: f_code[0][1] | f_code[1][0]             = 0xFF
-    //   byte 2: f_code[1][1] | intra_dc_prec(2) | pict_struct(2) = 0xFF -> 0b1111_00_11 = 0xF3
-    //   byte 3: tff(1)|fpfdct(1)|conceal(1)|qst(1)|ivlc(1)|altscan(1)|rff(1)|c420(1)
-    //   byte 4: prog_frame(1)|composite(1)|stuffing(6) -> 0b1000_0000 = 0x80
-    //
-    // For I-only default: tff=1, fpfdct=1, conceal=0, qst=0, ivlc=0,
-    //   altscan=0, rff=0, c420=1 → 0b1100_0001 = 0xC1
-    // For the altered variant: altscan=1 → 0b1100_0101 = 0xC5
     assert_eq!(
         bytes[ext_start + 3],
         0xC1,
         "unexpected pic-coding-ext byte3"
     );
-    bytes[ext_start + 3] = 0xC5; // set alternate_scan=1
-    let msg = decode_expect_unsupported(&bytes);
-    assert!(
-        msg.contains("alternate_scan"),
-        "expected alternate_scan rejection, got: {msg}"
-    );
+    bytes[ext_start + 3] = 0xC5;
+
+    let params = CodecParameters::video(CodecId::new(CODEC_ID_MPEG2_STR));
+    let mut dec = make_decoder_mpeg2(&params).expect("build mpeg2 decoder");
+    let pkt = Packet::new(0, TimeBase::new(1, 25), bytes);
+    dec.send_packet(&pkt).expect("send_packet");
+    dec.flush().expect("flush");
+    let frame = match dec.receive_frame() {
+        Ok(Frame::Video(v)) => v,
+        other => panic!("expected one VideoFrame, got {other:?}"),
+    };
+    // All-grey input → all-grey reconstruction regardless of scan order.
+    for plane in &frame.planes {
+        for &p in &plane.data {
+            assert!(
+                (p as i32 - 128).abs() <= 2,
+                "alternate_scan flipped a DC-only block: pixel {p}"
+            );
+        }
+    }
 }
 
 #[test]
