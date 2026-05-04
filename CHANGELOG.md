@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/OxideAV/oxideav-mpeg12video/compare/v0.0.9...v0.0.10) - 2026-05-04
+
+### Other
+
+- cargo fmt: split long ffmpeg-status assert
+- cross-validate MPEG-2 I-only output via ffmpeg
+- honour q_scale_type per picture (H.262 Table 7-6)
+- honour alternate_scan per picture (H.262 Figure 7-3)
+
 ### Added
 
 - MPEG-2 decoder: honour `alternate_scan` per picture (H.262 §7.3 Figure 7-3
