@@ -235,7 +235,10 @@ fn ffmpeg_decodes_our_mpeg2_output() {
         .stderr(std::process::Stdio::null())
         .status()
         .expect("spawn ffmpeg");
-    assert!(status.success(), "ffmpeg failed to decode our MPEG-2 output");
+    assert!(
+        status.success(),
+        "ffmpeg failed to decode our MPEG-2 output"
+    );
 
     // Read back the first decoded frame from raw YUV.
     let raw = std::fs::read(out_path).expect("read ffmpeg output");
